@@ -105,6 +105,15 @@ def target_eligible(rec: dict) -> bool:
     return True
 
 
+# @mentions, e.g. "@nelsoazhang yeah no". Used to detect "X tagged Y, Y replied".
+MENTION_RE = re.compile(r"@([A-Za-z0-9_]+)")
+
+
+def strip_mentions(text: str) -> str:
+    """Drop @username tokens (the addressing 'tag') and re-collapse whitespace."""
+    return re.sub(r"\s+", " ", MENTION_RE.sub("", text)).strip()
+
+
 def load_messages(path: Path) -> list[dict]:
     msgs = []
     with open(path, encoding="utf-8") as f:
@@ -197,6 +206,60 @@ def generate_windows(sessions: list[list[dict]], window: int, info_block: str,
     return samples
 
 
+def generate_qa_samples(msgs: list[dict], qa_info_block: str, delimiters: dict,
+                        window_s: int, require_tagback: bool) -> list[dict]:
+    """Find 'X tagged Y, Y replied within window_s seconds' pairs and turn each
+    into a Q&A training sample:
+
+        <info> ...qa flavour... </info>
+        <chat>
+        asker: <question, @tags stripped>
+        </chat>
+        <next><answer, @tags stripped></next>
+
+    Same delimiters as the main format, so it's one model; only the info block
+    differs to flip the model into 'answer the question' mode.
+    """
+    timed = sorted((m for m in msgs if isinstance(m["ts"], (int, float))),
+                   key=lambda m: m["ts"])
+    n = len(timed)
+    out = []
+    for i, q in enumerate(timed):
+        tagged = {t.lower() for t in MENTION_RE.findall(q["msg"])}
+        tagged.discard(q["user"].lower())          # ignore self-tags
+        if not tagged:
+            continue
+        # find the FIRST reply from any tagged user inside the time window
+        for j in range(i + 1, n):
+            if timed[j]["ts"] - q["ts"] > window_s:
+                break
+            a = timed[j]
+            if a["user"].lower() not in tagged or a["user"] == q["user"]:
+                continue
+            # precision filter: the answerer must tag the asker back
+            if require_tagback and ("@" + q["user"].lower()) not in a["msg"].lower():
+                break
+            q_text = strip_mentions(q["msg"])
+            a_text = strip_mentions(a["msg"])
+            if not q_text or not a_text:
+                break
+            if a_text.startswith("!"):             # answer is a bot command
+                break
+            if q_text.lower() == a_text.lower():   # echo / copypasta bounce
+                break
+            full, prompt, completion = build_text(
+                qa_info_block, [{"user": q["user"], "msg": q_text}], a_text,
+                delimiters["open_ctx"], delimiters["close_ctx"],
+                delimiters["open_next"], delimiters["close_next"],
+            )
+            out.append({
+                "text": full, "prompt": prompt, "completion": completion,
+                "_ts": a["ts"],
+            })
+            break
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -211,6 +274,13 @@ def main():
     ap.add_argument("--val-frac", type=float, default=0.05,
                     help="fraction of LAST sessions held out for eval (time-based, default 0.05)")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--no-qa", action="store_true",
+                    help="skip the tagged-reply Q&A samples (on by default)")
+    ap.add_argument("--qa-window", type=int, default=30,
+                    help="seconds; a tagged user's reply within this counts as an answer (default 30)")
+    ap.add_argument("--qa-loose", action="store_true",
+                    help="include Q&A pairs where the answer does NOT tag the asker back "
+                         "(more data, lower precision)")
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -228,6 +298,13 @@ def main():
         "<info>\n"
         f"you are a viewer in this twitch chat. your name is {args.bot_name}.\n"
         "chat is fast, casual, full of emotes and slang. write one short message.\n"
+        "</info>"
+    )
+    # Different info block flips the model into "answer the question" mode.
+    qa_info_block = (
+        "<info>\n"
+        f"you are a viewer in this twitch chat. your name is {args.bot_name}.\n"
+        "someone in chat asked you something. answer them with one short message.\n"
         "</info>"
     )
 
@@ -274,6 +351,20 @@ def main():
         return out
 
     all_samples = generate_with_ts(sessions)
+    n_chat = len(all_samples)
+
+    # ---- tagged-reply Q&A samples (different info block, same delimiters) ----
+    n_qa = 0
+    if not args.no_qa:
+        qa_samples = generate_qa_samples(
+            msgs, qa_info_block, delimiters,
+            window_s=args.qa_window, require_tagback=not args.qa_loose,
+        )
+        n_qa = len(qa_samples)
+        all_samples.extend(qa_samples)
+        print(f"Generated {n_chat} next-message samples + {n_qa} Q&A samples "
+              f"(tagged reply within {args.qa_window}s"
+              f"{'' if args.qa_loose else ', answerer tags back'})")
 
     if args.val_frac > 0:
         ts_vals = sorted(s["_ts"] for s in all_samples if s["_ts"] is not None)
