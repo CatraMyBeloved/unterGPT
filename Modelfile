@@ -1,0 +1,40 @@
+# Modelfile for the Twitch chat bot
+# ----------------------------------
+# Point FROM at the GGUF produced by train_chatbot.py
+# (model.save_pretrained_gguf -> ./chatbot_gguf/<file>.gguf)
+#
+# Build with:
+#   ollama create chatbot -f Modelfile
+# Run with:
+#   ollama run chatbot
+#
+# CRITICAL: the TEMPLATE and stop sequences below MUST match the delimiters in
+# format_spec.json byte-for-byte, or the model will produce garbage / never stop.
+
+FROM ./chatbot_gguf/unsloth.Q4_K_M.gguf
+
+# The template wraps the live context your bot assembles at runtime.
+# Your twitchio bot fills {{ .Prompt }} with the formatted <chat>...</chat> block
+# of the last 15 messages, and the model completes after <next>.
+TEMPLATE """<info>
+you are a viewer in this twitch chat. your name is chatbot.
+chat is fast, casual, full of emotes and slang. write one short message.
+</info>
+<chat>
+{{ .Prompt }}
+</chat>
+<next>"""
+
+# Stop as soon as the model closes the message. This is what keeps it from
+# running on into a hallucinated next user. </next> is the semantic stop.
+PARAMETER stop "</next>"
+PARAMETER stop "<chat>"
+PARAMETER stop "<info>"
+
+# Sampling: keep it lively. Low temperature makes chat flat and repetitive.
+PARAMETER temperature 1.0
+PARAMETER top_p 0.95
+PARAMETER top_k 60
+PARAMETER repeat_penalty 1.1
+# Cap output length -- chat messages are short (median ~24 chars in training).
+PARAMETER num_predict 40

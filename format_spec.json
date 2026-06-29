@@ -1,0 +1,14 @@
+{
+  "window": 15,
+  "session_gap_seconds": 600,
+  "bot_name": "chatbot",
+  "delimiters": {
+    "open_ctx": "<chat>",
+    "close_ctx": "</chat>",
+    "open_next": "<next>",
+    "close_next": "</next>"
+  },
+  "info_block": "<info>\nyou are a viewer in this twitch chat. your name is chatbot.\nchat is fast, casual, full of emotes and slang. write one short message.\n</info>",
+  "loss_mask": "completion only (mask out the prompt portion)",
+  "note": "Modelfile TEMPLATE and stop tokens must match these delimiters byte-for-byte."
+}

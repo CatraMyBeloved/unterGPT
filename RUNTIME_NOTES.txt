@@ -1,0 +1,101 @@
+RUNTIME NOTES — wiring the trained model into twitchio
+=======================================================
+
+The bot's job at runtime: keep a rolling buffer of the last 15 messages, and
+every ~70 messages format them exactly like the training data and ask Ollama
+for the next message.
+
+The single rule that makes or breaks it: the string you send to Ollama must
+match the training format BYTE-FOR-BYTE. The Modelfile TEMPLATE already wraps
+your input in the <info>/<chat>/<next> scaffold, so your bot only needs to send
+the inner context lines (the "user: msg" block). Do NOT re-add <info> or <chat>
+tags in the bot — the Modelfile does that. Just send the joined lines as the
+prompt.
+
+
+CONTEXT FORMAT (what your bot sends as the Ollama "prompt")
+-----------------------------------------------------------
+Exactly the lines that go between <chat> and </chat>, one per message:
+
+    user1: KEKW
+    user2: he really did that poroAgony
+    user3: !agaslotmachine
+    Nightbot: @user3 You rolled: [ aba | aba | aba ]
+
+Note you KEEP commands and bot messages in the context you send — the model was
+trained to read them as part of the scroll. You only filter the bot's OWN
+messages out (see below).
+
+
+KEY RUNTIME LOGIC
+-----------------
+1. Rolling buffer:        collections.deque(maxlen=15)
+2. Message counter:       increment on every incoming message; when it hits 70,
+                          generate + post, then reset to 0.
+3. Filter own messages:   twitchio echoes the bot's sent messages back through
+                          the message event. Skip them in BOTH the counter and
+                          the buffer:
+                              if message.echo: return
+                          (or compare message.author.name to the bot's nick)
+                          This also prevents any self-reinforcement loop.
+4. Async HTTP only:       call Ollama with httpx/aiohttp (await), never a
+                          blocking requests.post — that would freeze message
+                          ingestion during generation.
+5. Stop tokens:           the Modelfile already sets stop "</next>". Ollama
+                          strips it, so what you get back is the clean message.
+                          Trim whitespace and post it.
+6. Rate limit:            1-in-70 is far under Twitch's ~20 msg / 30s cap. Fine.
+
+
+MINIMAL SHAPE (pseudocode, not a drop-in)
+-----------------------------------------
+    from collections import deque
+    import httpx
+    from twitchio.ext import commands
+
+    BUF = deque(maxlen=15)
+    COUNT = 0
+    THRESHOLD = 70
+    BOT_NICK = "chatbot"
+
+    class Bot(commands.Bot):
+        async def event_message(self, message):
+            global COUNT
+            if message.echo:                 # our own message -> ignore
+                return
+            BUF.append(f"{message.author.name}: {message.content}")
+            COUNT += 1
+            if COUNT >= THRESHOLD:
+                COUNT = 0
+                await self.post_one(message.channel)
+
+        async def post_one(self, channel):
+            prompt = "\n".join(BUF)          # just the context lines
+            async with httpx.AsyncClient() as client:
+                r = await client.post(
+                    "http://localhost:11434/api/generate",
+                    json={"model": "chatbot", "prompt": prompt, "stream": False},
+                    timeout=30,
+                )
+            text = r.json()["response"].strip()
+            if text:
+                await channel.send(text[:480])   # Twitch hard cap ~500 chars
+
+
+OPTIONAL: respond when tagged
+-----------------------------
+If you later want it to react when someone @-mentions it, add a check in
+event_message: if BOT_NICK.lower() in message.content.lower(), call post_one
+immediately (and maybe reset COUNT). But remember the model was trained on pure
+chat — it will "answer" in chat-voice (dismissive, joke-y, off-topic), not give
+real answers. That's the funny part; keep it.
+
+
+SANITY CHECK BEFORE GOING LIVE
+------------------------------
+Run a few of your held-out contexts through `ollama run chatbot` manually and
+paste a 15-line block. If output is coherent chat-style messages that stop
+cleanly, you're good. If it runs on forever -> stop token mismatch. If it's
+flat/repetitive -> raise temperature. If it outputs "user: ..." prefixes ->
+your training targets accidentally included usernames (they don't here, so this
+shouldn't happen).
