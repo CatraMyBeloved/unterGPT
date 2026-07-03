@@ -1,5 +1,5 @@
 {
-  "window": 15,
+  "window": 32,
   "session_gap_seconds": 600,
   "bot_name": "chatbot",
   "delimiters": {

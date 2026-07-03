@@ -6,7 +6,7 @@ Turn a raw Twitch chat .jsonl scrape into a training-ready dataset for an
 Unsloth/QLoRA fine-tune that imitates the chat.
 
 Design (per project spec):
-  * CONTEXT  = last N messages (default 15), formatted "user: msg".
+  * CONTEXT  = last N messages (default 32), formatted "user: msg".
                Keeps EVERYTHING, including bot commands (!foo) and bot-account
                messages (Nightbot) -- this is the authentic scroll the live bot
                will see.
@@ -265,8 +265,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--input", default="chat_logs.jsonl")
     ap.add_argument("--outdir", default=".")
-    ap.add_argument("--window", type=int, default=15,
-                    help="max context messages per sample (default 15)")
+    ap.add_argument("--window", type=int, default=32,
+                    help="max context messages per sample (default 32)")
     ap.add_argument("--session-gap", type=int, default=600,
                     help="seconds; gaps larger than this start a new session (default 600)")
     ap.add_argument("--bot-name", default="chatbot",

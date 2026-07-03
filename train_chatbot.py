@@ -2,16 +2,17 @@
 """
 train_chatbot.py
 ----------------
-QLoRA fine-tune of Qwen2.5-1.5B (or Llama-3.2-3B) on the Twitch-chat dataset
-produced by prepare_chat_data.py, using Unsloth.
+QLoRA fine-tune of Llama-3.2-3B on the Twitch-chat dataset produced by
+prepare_chat_data.py, using Unsloth.
 
 Trains on a BASE model (not instruct) -- we want chaotic chat completion, not
 a polite assistant. Loss is masked to the COMPLETION only (the <next>...</next>
 target), so the model is graded purely on producing the next chat message.
 
-Tested target hardware: single RTX 4060 (8GB). At max_seq_length=512 this runs
-comfortably; if you ever OOM, drop per_device_train_batch_size to 1 and raise
-gradient_accumulation_steps to compensate.
+Tested target hardware: single RTX 4060 (8GB). The 3B model at
+max_seq_length=1024 (32-message context) is tight on 8GB, so we default to
+per_device_train_batch_size=1 with gradient_accumulation_steps=8 (effective
+batch 8). If you still OOM, drop MAX_SEQ_LEN back toward 768 or reduce LORA_RANK.
 
 Usage:
     pip install unsloth
@@ -30,10 +31,11 @@ import torch
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-MODEL = "unsloth/Qwen2.5-1.5B-bnb-4bit"   # base model, pre-quantized
-# Alternative: "unsloth/Llama-3.2-3B-bnb-4bit"  (3B, a bit slower, more range)
+MODEL = "unsloth/Llama-3.2-3B-bnb-4bit"   # base model, pre-quantized (3B)
+# Alternative: "unsloth/Qwen2.5-1.5B-bnb-4bit"  (1.5B, faster, less range)
 
-MAX_SEQ_LEN = 512        # p95 of our samples is ~414 tokens; 512 is comfortable
+MAX_SEQ_LEN = 1024       # 32-message context ~doubles length vs the old 15;
+                         # 1024 covers the p95 with headroom for the target
 EPOCHS = 3               # checkpoint each epoch and eyeball output; 3 is the sweet spot
 LR = 2e-4                # Unsloth's recommended LoRA starting LR
 LORA_RANK = 16
@@ -103,8 +105,8 @@ ds = ds.map(add_eos)
 cfg = SFTConfig(
     dataset_text_field="text",
     max_seq_length=MAX_SEQ_LEN,
-    per_device_train_batch_size=2,
-    gradient_accumulation_steps=4,     # effective batch size 8
+    per_device_train_batch_size=1,     # 3B @ 1024 seq len is tight on 8GB
+    gradient_accumulation_steps=8,     # effective batch size 8
     warmup_ratio=0.03,
     num_train_epochs=EPOCHS,
     learning_rate=LR,

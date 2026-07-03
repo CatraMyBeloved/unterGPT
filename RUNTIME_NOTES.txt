@@ -1,7 +1,7 @@
 RUNTIME NOTES — wiring the trained model into twitchio
 =======================================================
 
-The bot's job at runtime: keep a rolling buffer of the last 15 messages, and
+The bot's job at runtime: keep a rolling buffer of the last 32 messages, and
 every ~70 messages format them exactly like the training data and ask Ollama
 for the next message.
 
@@ -29,7 +29,7 @@ messages out (see below).
 
 KEY RUNTIME LOGIC
 -----------------
-1. Rolling buffer:        collections.deque(maxlen=15)
+1. Rolling buffer:        collections.deque(maxlen=32)
 2. Message counter:       increment on every incoming message; when it hits 70,
                           generate + post, then reset to 0.
 3. Filter own messages:   twitchio echoes the bot's sent messages back through
@@ -53,7 +53,7 @@ MINIMAL SHAPE (pseudocode, not a drop-in)
     import httpx
     from twitchio.ext import commands
 
-    BUF = deque(maxlen=15)
+    BUF = deque(maxlen=32)
     COUNT = 0
     THRESHOLD = 70
     BOT_NICK = "chatbot"
@@ -94,7 +94,7 @@ real answers. That's the funny part; keep it.
 SANITY CHECK BEFORE GOING LIVE
 ------------------------------
 Run a few of your held-out contexts through `ollama run chatbot` manually and
-paste a 15-line block. If output is coherent chat-style messages that stop
+paste a 32-line block. If output is coherent chat-style messages that stop
 cleanly, you're good. If it runs on forever -> stop token mismatch. If it's
 flat/repetitive -> raise temperature. If it outputs "user: ..." prefixes ->
 your training targets accidentally included usernames (they don't here, so this
